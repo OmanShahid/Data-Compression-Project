@@ -19,3 +19,4 @@ clean:
 
 windows:
 	x86_64-w64-mingw32-gcc $(CFLAGS) -o stage1_simple.exe stage1_simple.c
+	
