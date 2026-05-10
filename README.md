@@ -20,8 +20,11 @@ ________________________________________
 
 1. Build the Project
 Clean and compile the C source code using the provided Makefile:
+
 PowerShell
+
 mingw32-make clean
+
 mingw32-make
 
 
