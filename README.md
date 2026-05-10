@@ -4,11 +4,17 @@ A high-performance, lossless data compression tool inspired by the BZip2 archite
 
 🚀 Advanced Optimizations (Bonus Features)
 This implementation includes several high-tier optimizations that qualify for the 10% extra marks bonus:
+
 •	Suffix Array-based BWT: Replaces the standard $O(N^2)$ matrix transform with a Suffix Array (Prefix Doubling) approach, allowing the processing of large blocks (up to 500KB+) without memory exhaustion.
+
 •	Asymmetric Numeral Systems (rANS): Utilizes a modern rANS entropy engine instead of traditional Huffman coding, providing a significant "fractional bit" advantage for superior compression.
+
 •	Threshold-Based RLE (RLE1): A marker-based Run-Length Encoding stage that only encodes runs of 4 or more characters to prevent data expansion on non-repetitive segments.
+
 •	MTF (Move-To-Front) & RLE2: Efficiently transforms BWT output into a zero-heavy stream, collapsed by a second RLE stage specifically designed for rANS input.
+
 •	Lossless Pipeline Sync: Includes robust buffer-length synchronization between stages to ensure 100% data integrity, resolving block-boundary truncation issues (e.g., ensuring trailing strings like " SHAH" are preserved).
+
 ________________________________________
 🛠️ Execution Guide
 
