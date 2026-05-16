@@ -1,0 +1,7 @@
+*.o
+*.exe
+bzip2_impl
+*.bzp
+restored.txt
+*.stages.txt
+stage_log.txt

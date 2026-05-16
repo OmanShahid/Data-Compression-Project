@@ -18,14 +18,33 @@ This implementation includes several high-tier optimizations that qualify for th
 ________________________________________
 🛠️ Execution Guide
 
-1. Build the Project
-Clean and compile the C source code using the provided Makefile:
+1. Build the Project on Linux
+After cloning the repository, clean and compile from source:
+
+Bash
+
+make clean
+
+make
+
+The repository should not contain prebuilt `.o` files or Windows `.exe` files.
+If you see errors such as `undefined reference to __imp_isspace`,
+`undefined reference to __imp_tolower`, `.pdata`, or `__ImageBase`,
+old Windows object files are still present. Remove them and rebuild:
+
+Bash
+
+rm -f src/*.o bzip2_impl
+
+make
+
+To build on Windows with MinGW, use:
 
 PowerShell
 
 mingw32-make clean
 
-mingw32-make
+mingw32-make windows
 
 
 2. Manual Compression & Decompression
@@ -36,6 +55,23 @@ PowerShell
 
 # Decompress
 .\bzip2_impl.exe d output.bzp restored.txt
+
+Stage logs are written automatically for each run:
+
+PowerShell
+# Compression stage output log
+output.bzp.stages.txt
+
+# Decompression stage output log
+restored.txt.stages.txt
+
+You can choose a custom stage log file:
+
+PowerShell
+.\bzip2_impl.exe c input.txt output.bzp config.ini --log my_stage_log.txt
+.\bzip2_impl.exe d output.bzp restored.txt --log my_stage_log.txt
+
+Use `--no-log` if you do not want stage output files.
 
 
 3. Automated Benchmarking & Visualization

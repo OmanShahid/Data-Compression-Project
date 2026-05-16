@@ -123,6 +123,16 @@ static int has_trace_flag(int argc, char **argv) {
     return 0;
 }
 
+static int has_no_log_flag(int argc, char **argv) {
+    int i;
+    for (i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--no-log") == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
 static int parse_log_path(int argc, char **argv, char *out_path, size_t out_size) {
     int i;
     const char *default_path = "stage_log.txt";
@@ -149,6 +159,21 @@ static int parse_log_path(int argc, char **argv, char *out_path, size_t out_size
         }
     }
     return 0;
+}
+
+static void make_default_log_path(const char *output_file, char *out_path, size_t out_size) {
+    if (out_path == NULL || out_size == 0) {
+        return;
+    }
+
+    if (output_file == NULL || output_file[0] == '\0') {
+        strncpy(out_path, "stage_log.txt", out_size - 1);
+        out_path[out_size - 1] = '\0';
+        return;
+    }
+
+    snprintf(out_path, out_size, "%s.stages.txt", output_file);
+    out_path[out_size - 1] = '\0';
 }
 
 static void write_u32(FILE *fp, unsigned int v) {
@@ -450,6 +475,13 @@ static int read_compressed(const char *input_file, const char *output_file, Stag
         return -1;
     }
 
+    if (log != NULL && log->fp != NULL) {
+        fprintf(log->fp, "BLOCK_SIZE: %lu\n", (unsigned long)block_size);
+        fprintf(log->fp, "NUM_BLOCKS: %lu\n", (unsigned long)num_blocks);
+        fprintf(log->fp, "PIPELINE: RLE1=%d BWT=%d MTF=%d RLE2=%d ANS=%d\n", (int)flags.rle1_enabled, (int)flags.bwt_enabled,
+                (int)flags.mtf_enabled, (int)flags.rle2_enabled, (int)flags.ans_enabled);
+    }
+
     manager = (BlockManager *)calloc(1, sizeof(BlockManager));
     if (manager == NULL) {
         fclose(fp);
@@ -516,11 +548,13 @@ static int read_compressed(const char *input_file, const char *output_file, Stag
 
 static void print_usage(const char *program_name) {
     printf("Usage:\n");
-    printf("  %s c <input_file> <output_file> [config.ini] [--trace|-t] [--log [file]]\n", program_name);
-    printf("  %s d <input_file> <output_file> [--trace|-t] [--log [file]]\n", program_name);
+    printf("  %s c <input_file> <output_file> [config.ini] [--trace|-t] [--log [file]] [--no-log]\n", program_name);
+    printf("  %s d <input_file> <output_file> [--trace|-t] [--log [file]] [--no-log]\n", program_name);
     printf("\nOptions:\n");
     printf("  --trace, -t       Print stage previews on terminal\n");
-    printf("  --log [file]      Write full stage output to file (default: stage_log.txt)\n");
+    printf("  --log [file]      Write full stage output to file\n");
+    printf("                    Default file: <output_file>.stages.txt\n");
+    printf("  --no-log          Do not write a stage output file\n");
 }
 
 static const char *find_config_path(int argc, char **argv) {
@@ -539,7 +573,8 @@ static const char *find_config_path(int argc, char **argv) {
 int main(int argc, char **argv) {
     int trace = has_trace_flag(argc, argv);
     char log_path[512] = "";
-    int use_log = parse_log_path(argc, argv, log_path, sizeof(log_path));
+    int user_log_path = parse_log_path(argc, argv, log_path, sizeof(log_path));
+    int use_log;
     StageLogger logger = {NULL, 0};
     StageLogger *log_ptr = NULL;
     FILE *log_fp = NULL;
@@ -547,6 +582,11 @@ int main(int argc, char **argv) {
     if (argc < 4) {
         print_usage(argv[0]);
         return 1;
+    }
+
+    use_log = !has_no_log_flag(argc, argv);
+    if (use_log && !user_log_path) {
+        make_default_log_path(argv[3], log_path, sizeof(log_path));
     }
 
     if (trace || use_log) {
@@ -605,13 +645,13 @@ int main(int argc, char **argv) {
         printf("compressed successfully: %s\n", argv[3]);
     } else if (argv[1][0] == 'd') {
         if (use_log) {
-            log_fp = fopen(log_path, "a");
+            log_fp = fopen(log_path, user_log_path ? "a" : "w");
             if (log_fp == NULL) {
                 fprintf(stderr, "failed to open log file: %s\n", log_path);
                 return 1;
             }
             logger.fp = log_fp;
-            printf("stage log file (append): %s\n", log_path);
+            printf(user_log_path ? "stage log file (append): %s\n" : "stage log file: %s\n", log_path);
         }
 
         if (read_compressed(argv[2], argv[3], log_ptr) != 0) {

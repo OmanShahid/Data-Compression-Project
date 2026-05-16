@@ -3,19 +3,14 @@ CFLAGS ?= -Wall -Wextra -O2 -Iinclude -std=c11
 TARGET = bzip2_impl
 SOURCES = src/main.c src/block.c src/rle.c src/bwt.c src/mtf.c src/rans.c src/config.c
 OBJECTS = $(SOURCES:.c=.o)
+RM ?= rm -f
 
 ifeq ($(OS),Windows_NT)
     EXE = .exe
-    RUN_PREFIX = .\
 else
     EXE =
-    RUN_PREFIX = ./
 endif
-
-# =====================================================================
-# DEFAULT TARGET (Moved to the top so 'make' runs this by default)
-# =====================================================================
-default: test_pipeline
+RUN_PREFIX = ./
 
 all: $(TARGET)$(EXE)
 
@@ -26,8 +21,9 @@ src/%.o: src/%.c
 	$(CC) $(CFLAGS) -c $< -o $@
 
 clean:
-	$(RM) src\*.o
-	$(RM) $(TARGET)$(EXE)
+	$(RM) src/*.o
+	$(RM) $(TARGET) $(TARGET).exe
+	$(RM) output.bzp restored.txt stage_log.txt *.stages.txt
 
 windows:
 	x86_64-w64-mingw32-gcc $(CFLAGS) -o $(TARGET).exe $(SOURCES)
@@ -47,4 +43,4 @@ decompress: $(TARGET)$(EXE)
 # Shortcut to do both back-to-back
 test_pipeline: compress decompress
 
-.PHONY: default all clean windows compress decompress test_pipeline
+.PHONY: all clean windows compress decompress test_pipeline
