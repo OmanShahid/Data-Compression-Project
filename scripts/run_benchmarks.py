@@ -34,7 +34,7 @@ def run_benchmarks():
         print("Please compile the project using 'make' first.")
         return
 
-    # Assume default block size if config parsing isn't implemented in the script
+    
     block_size = 500000 
 
     print("Starting Benchmarks...")

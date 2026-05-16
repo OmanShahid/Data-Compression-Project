@@ -19,6 +19,11 @@ typedef struct {
     unsigned char ans_enabled;
 } PipelineFlags;
 
+typedef struct {
+    FILE *fp;
+    int console;
+} StageLogger;
+
 static void print_bytes_preview(const char *label, const unsigned char *buf, size_t len) {
     const size_t max_show = 64;
     size_t show = len < max_show ? len : max_show;
@@ -54,6 +59,60 @@ static void print_bytes_preview(const char *label, const unsigned char *buf, siz
     printf("\n");
 }
 
+static void log_stage_to_file(FILE *fp, const char *stage_name, const unsigned char *buf, size_t len) {
+    size_t i;
+
+    if (fp == NULL) {
+        return;
+    }
+
+    fprintf(fp, "\n----------------------------------------\n");
+    fprintf(fp, "STAGE: %s\n", stage_name);
+    fprintf(fp, "LENGTH: %lu bytes\n", (unsigned long)len);
+
+    if (len == 0) {
+        fprintf(fp, "DATA: <empty>\n");
+        return;
+    }
+
+    fprintf(fp, "HEX:\n");
+    for (i = 0; i < len; ++i) {
+        fprintf(fp, "%02X ", (unsigned int)buf[i]);
+        if ((i + 1) % 16 == 0) {
+            fputc('\n', fp);
+        }
+    }
+    if (len % 16 != 0) {
+        fputc('\n', fp);
+    }
+
+    fprintf(fp, "ASCII:\n");
+    for (i = 0; i < len; ++i) {
+        unsigned char c = buf[i];
+        if (c >= 32 && c <= 126) {
+            fputc((int)c, fp);
+        } else {
+            fputc('.', fp);
+        }
+    }
+    fputc('\n', fp);
+}
+
+static void log_stage(StageLogger *log, const char *stage_name, const unsigned char *buf, size_t len) {
+    if (log == NULL) {
+        return;
+    }
+    if (log->fp == NULL && !log->console) {
+        return;
+    }
+    if (log->fp != NULL) {
+        log_stage_to_file(log->fp, stage_name, buf, len);
+    }
+    if (log->console) {
+        print_bytes_preview(stage_name, buf, len);
+    }
+}
+
 static int has_trace_flag(int argc, char **argv) {
     int i;
     for (i = 1; i < argc; ++i) {
@@ -62,6 +121,59 @@ static int has_trace_flag(int argc, char **argv) {
         }
     }
     return 0;
+}
+
+static int has_no_log_flag(int argc, char **argv) {
+    int i;
+    for (i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--no-log") == 0) {
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static int parse_log_path(int argc, char **argv, char *out_path, size_t out_size) {
+    int i;
+    const char *default_path = "stage_log.txt";
+
+    if (out_path == NULL || out_size == 0) {
+        return 0;
+    }
+
+    for (i = 1; i < argc; ++i) {
+        if (strcmp(argv[i], "--log") == 0) {
+            if (i + 1 < argc && argv[i + 1][0] != '-') {
+                strncpy(out_path, argv[i + 1], out_size - 1);
+                out_path[out_size - 1] = '\0';
+            } else {
+                strncpy(out_path, default_path, out_size - 1);
+                out_path[out_size - 1] = '\0';
+            }
+            return 1;
+        }
+        if (strncmp(argv[i], "--log=", 6) == 0) {
+            strncpy(out_path, argv[i] + 6, out_size - 1);
+            out_path[out_size - 1] = '\0';
+            return 1;
+        }
+    }
+    return 0;
+}
+
+static void make_default_log_path(const char *output_file, char *out_path, size_t out_size) {
+    if (out_path == NULL || out_size == 0) {
+        return;
+    }
+
+    if (output_file == NULL || output_file[0] == '\0') {
+        strncpy(out_path, "stage_log.txt", out_size - 1);
+        out_path[out_size - 1] = '\0';
+        return;
+    }
+
+    snprintf(out_path, out_size, "%s.stages.txt", output_file);
+    out_path[out_size - 1] = '\0';
 }
 
 static void write_u32(FILE *fp, unsigned int v) {
@@ -85,7 +197,7 @@ static unsigned int read_u32(FILE *fp, int *ok) {
            (unsigned int)bytes[3];
 }
 
-static int apply_encode_pipeline(const unsigned char *input, size_t len, PipelineFlags flags, int trace, int block_no,
+static int apply_encode_pipeline(const unsigned char *input, size_t len, PipelineFlags flags, StageLogger *log, int block_no,
                                  int *primary_index, unsigned char **out_data, size_t *out_len) {
     unsigned char *buf_a = NULL;
     unsigned char *buf_b = NULL;
@@ -114,72 +226,62 @@ static int apply_encode_pipeline(const unsigned char *input, size_t len, Pipelin
 
     memcpy(buf_a, input, len);
 
-    if (trace) {
-        printf("\n=== ENCODE BLOCK %d ===\n", block_no);
-        print_bytes_preview("input", buf_a, cur_len);
+    if (log != NULL && (log->fp != NULL || log->console)) {
+        if (log->fp != NULL) {
+            fprintf(log->fp, "\n######## ENCODE BLOCK %d ########\n", block_no);
+        }
+        if (log->console) {
+            printf("\n=== ENCODE BLOCK %d ===\n", block_no);
+        }
+        log_stage(log, "BLOCK INPUT", buf_a, cur_len);
     }
 
     if (flags.rle1_enabled) {
         size_t tmp_len = 0;
-        if (trace) {
-            print_bytes_preview("RLE1 input", buf_a, cur_len);
-        }
+        log_stage(log, "RLE1 INPUT", buf_a, cur_len);
         rle1_encode(buf_a, cur_len, buf_b, &tmp_len);
-        if (trace) {
-            print_bytes_preview("RLE1 output", buf_b, tmp_len);
-        }
+        log_stage(log, "RLE1 OUTPUT", buf_b, tmp_len);
         cur_len = tmp_len;
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.bwt_enabled) {
-        if (trace) {
-            print_bytes_preview("BWT input", buf_a, cur_len);
-        }
+        log_stage(log, "BWT INPUT", buf_a, cur_len);
         bwt_encode(buf_a, cur_len, buf_b, primary_index);
-        if (trace) {
-            printf("BWT primary_index=%d\n", *primary_index);
-            print_bytes_preview("BWT output", buf_b, cur_len);
+        if (log != NULL && log->fp != NULL) {
+            fprintf(log->fp, "\n----------------------------------------\n");
+            fprintf(log->fp, "STAGE: BWT PRIMARY_INDEX\n");
+            fprintf(log->fp, "VALUE: %d\n", *primary_index);
         }
+        if (log != NULL && log->console) {
+            printf("BWT primary_index=%d\n", *primary_index);
+        }
+        log_stage(log, "BWT OUTPUT", buf_b, cur_len);
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.mtf_enabled) {
-        if (trace) {
-            print_bytes_preview("MTF input", buf_a, cur_len);
-        }
+        log_stage(log, "MTF INPUT", buf_a, cur_len);
         mtf_encode(buf_a, cur_len, buf_b);
-        if (trace) {
-            print_bytes_preview("MTF output", buf_b, cur_len);
-        }
+        log_stage(log, "MTF OUTPUT", buf_b, cur_len);
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.rle2_enabled) {
         size_t tmp_len = 0;
-        if (trace) {
-            print_bytes_preview("RLE2 input", buf_a, cur_len);
-        }
+        log_stage(log, "RLE2 INPUT", buf_a, cur_len);
         rle2_encode(buf_a, cur_len, buf_b, &tmp_len);
-        if (trace) {
-            print_bytes_preview("RLE2 output", buf_b, tmp_len);
-        }
+        log_stage(log, "RLE2 OUTPUT", buf_b, tmp_len);
         cur_len = tmp_len;
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.ans_enabled) {
         size_t tmp_len = 0;
-        if (trace) {
-            print_bytes_preview("ANS input", buf_a, cur_len);
-        }
+        log_stage(log, "ANS INPUT", buf_a, cur_len);
         rans_encode(buf_a, cur_len, buf_b, &tmp_len);
-        if (trace) {
-            print_bytes_preview("ANS output", buf_b, tmp_len);
-        }
+        log_stage(log, "ANS OUTPUT", buf_b, tmp_len);
         cur_len = tmp_len;
         memcpy(buf_a, buf_b, cur_len);
     }
 
-    if (trace) {
-        print_bytes_preview("final encoded payload", buf_a, cur_len);
-    }
+    log_stage(log, "FINAL ENCODED PAYLOAD", buf_a, cur_len);
 
     *out_data = (unsigned char *)malloc(cur_len == 0 ? 1 : cur_len);
     if (*out_data == NULL) {
@@ -195,7 +297,7 @@ static int apply_encode_pipeline(const unsigned char *input, size_t len, Pipelin
     return 0;
 }
 
-static int apply_decode_pipeline(const unsigned char *input, size_t len, size_t expected_size, PipelineFlags flags, int trace,
+static int apply_decode_pipeline(const unsigned char *input, size_t len, size_t expected_size, PipelineFlags flags, StageLogger *log,
                                  int block_no, int primary_index, unsigned char **out_data, size_t *out_len) {
     unsigned char *buf_a = NULL;
     unsigned char *buf_b = NULL;
@@ -218,72 +320,57 @@ static int apply_decode_pipeline(const unsigned char *input, size_t len, size_t 
 
     memcpy(buf_a, input, len);
 
-    if (trace) {
-        printf("\n=== DECODE BLOCK %d ===\n", block_no);
-        printf("expected_output_size=%lu primary_index=%d\n", (unsigned long)expected_size, primary_index);
-        print_bytes_preview("encoded payload", buf_a, cur_len);
+    if (log != NULL && (log->fp != NULL || log->console)) {
+        if (log->fp != NULL) {
+            fprintf(log->fp, "\n######## DECODE BLOCK %d ########\n", block_no);
+            fprintf(log->fp, "EXPECTED_OUTPUT_SIZE: %lu bytes\n", (unsigned long)expected_size);
+            fprintf(log->fp, "PRIMARY_INDEX: %d\n", primary_index);
+        }
+        if (log->console) {
+            printf("\n=== DECODE BLOCK %d ===\n", block_no);
+            printf("expected_output_size=%lu primary_index=%d\n", (unsigned long)expected_size, primary_index);
+        }
+        log_stage(log, "ENCODED PAYLOAD INPUT", buf_a, cur_len);
     }
 
     if (flags.ans_enabled) {
         size_t tmp_len = 0;
-        if (trace) {
-            print_bytes_preview("ANS input", buf_a, cur_len);
-        }
+        log_stage(log, "ANS INPUT", buf_a, cur_len);
         rans_decode(buf_a, cur_len, buf_b, &tmp_len);
-        if (trace) {
-            print_bytes_preview("ANS output", buf_b, tmp_len);
-        }
+        log_stage(log, "ANS OUTPUT", buf_b, tmp_len);
         cur_len = tmp_len;
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.rle2_enabled) {
         size_t tmp_len = 0;
-        if (trace) {
-            print_bytes_preview("RLE2 input", buf_a, cur_len);
-        }
+        log_stage(log, "RLE2 INPUT", buf_a, cur_len);
         rle2_decode(buf_a, cur_len, buf_b, &tmp_len);
-        if (trace) {
-            print_bytes_preview("RLE2 output", buf_b, tmp_len);
-        }
+        log_stage(log, "RLE2 OUTPUT", buf_b, tmp_len);
         cur_len = tmp_len;
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.mtf_enabled) {
-        if (trace) {
-            print_bytes_preview("MTF input", buf_a, cur_len);
-        }
+        log_stage(log, "MTF INPUT", buf_a, cur_len);
         mtf_decode(buf_a, cur_len, buf_b);
-        if (trace) {
-            print_bytes_preview("MTF output", buf_b, cur_len);
-        }
+        log_stage(log, "MTF OUTPUT", buf_b, cur_len);
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.bwt_enabled) {
-        if (trace) {
-            print_bytes_preview("BWT input", buf_a, cur_len);
-        }
+        log_stage(log, "BWT INPUT", buf_a, cur_len);
         bwt_decode(buf_a, cur_len, primary_index, buf_b);
-        if (trace) {
-            print_bytes_preview("BWT output", buf_b, cur_len);
-        }
+        log_stage(log, "BWT OUTPUT", buf_b, cur_len);
         memcpy(buf_a, buf_b, cur_len);
     }
     if (flags.rle1_enabled) {
         size_t tmp_len = 0;
-        if (trace) {
-            print_bytes_preview("RLE1 input", buf_a, cur_len);
-        }
+        log_stage(log, "RLE1 INPUT", buf_a, cur_len);
         rle1_decode(buf_a, cur_len, buf_b, &tmp_len);
-        if (trace) {
-            print_bytes_preview("RLE1 output", buf_b, tmp_len);
-        }
+        log_stage(log, "RLE1 OUTPUT", buf_b, tmp_len);
         cur_len = tmp_len;
         memcpy(buf_a, buf_b, cur_len);
     }
 
-    if (trace) {
-        print_bytes_preview("final decoded block", buf_a, cur_len);
-    }
+    log_stage(log, "FINAL DECODED BLOCK", buf_a, cur_len);
 
     *out_data = (unsigned char *)malloc(cur_len == 0 ? 1 : cur_len);
     if (*out_data == NULL) {
@@ -299,12 +386,23 @@ static int apply_decode_pipeline(const unsigned char *input, size_t len, size_t 
     return 0;
 }
 
-static int write_compressed(const char *output_file, BlockManager *manager, PipelineFlags flags, size_t block_size, int trace) {
+static int write_compressed(const char *input_file, const char *output_file, BlockManager *manager, PipelineFlags flags,
+                            size_t block_size, StageLogger *log) {
     FILE *fp = fopen(output_file, "wb");
     int i;
 
     if (fp == NULL) {
         return -1;
+    }
+
+    if (log != NULL && log->fp != NULL) {
+        fprintf(log->fp, "========== COMPRESSION ==========\n");
+        fprintf(log->fp, "INPUT_FILE: %s\n", input_file);
+        fprintf(log->fp, "OUTPUT_FILE: %s\n", output_file);
+        fprintf(log->fp, "BLOCK_SIZE: %lu\n", (unsigned long)block_size);
+        fprintf(log->fp, "NUM_BLOCKS: %d\n", manager->num_blocks);
+        fprintf(log->fp, "PIPELINE: RLE1=%d BWT=%d MTF=%d RLE2=%d ANS=%d\n", (int)flags.rle1_enabled, (int)flags.bwt_enabled,
+                (int)flags.mtf_enabled, (int)flags.rle2_enabled, (int)flags.ans_enabled);
     }
 
     fwrite(MAGIC, 1, 4, fp);
@@ -320,7 +418,7 @@ static int write_compressed(const char *output_file, BlockManager *manager, Pipe
         unsigned char *encoded = NULL;
         size_t encoded_len = 0;
         int primary_index = -1;
-        int rc = apply_encode_pipeline(manager->blocks[i].data, manager->blocks[i].size, flags, trace, i, &primary_index, &encoded,
+        int rc = apply_encode_pipeline(manager->blocks[i].data, manager->blocks[i].size, flags, log, i, &primary_index, &encoded,
                                        &encoded_len);
         if (rc != 0) {
             fclose(fp);
@@ -339,7 +437,7 @@ static int write_compressed(const char *output_file, BlockManager *manager, Pipe
     return 0;
 }
 
-static int read_compressed(const char *input_file, const char *output_file, int trace) {
+static int read_compressed(const char *input_file, const char *output_file, StageLogger *log) {
     FILE *fp = fopen(input_file, "rb");
     char magic[4];
     PipelineFlags flags;
@@ -358,6 +456,12 @@ static int read_compressed(const char *input_file, const char *output_file, int 
         return -1;
     }
 
+    if (log != NULL && log->fp != NULL) {
+        fprintf(log->fp, "\n========== DECOMPRESSION ==========\n");
+        fprintf(log->fp, "INPUT_FILE: %s\n", input_file);
+        fprintf(log->fp, "OUTPUT_FILE: %s\n", output_file);
+    }
+
     flags.rle1_enabled = (unsigned char)fgetc(fp);
     flags.bwt_enabled = (unsigned char)fgetc(fp);
     flags.mtf_enabled = (unsigned char)fgetc(fp);
@@ -369,6 +473,13 @@ static int read_compressed(const char *input_file, const char *output_file, int 
     if (!ok) {
         fclose(fp);
         return -1;
+    }
+
+    if (log != NULL && log->fp != NULL) {
+        fprintf(log->fp, "BLOCK_SIZE: %lu\n", (unsigned long)block_size);
+        fprintf(log->fp, "NUM_BLOCKS: %lu\n", (unsigned long)num_blocks);
+        fprintf(log->fp, "PIPELINE: RLE1=%d BWT=%d MTF=%d RLE2=%d ANS=%d\n", (int)flags.rle1_enabled, (int)flags.bwt_enabled,
+                (int)flags.mtf_enabled, (int)flags.rle2_enabled, (int)flags.ans_enabled);
     }
 
     manager = (BlockManager *)calloc(1, sizeof(BlockManager));
@@ -411,7 +522,7 @@ static int read_compressed(const char *input_file, const char *output_file, int 
             return -1;
         }
 
-        if (apply_decode_pipeline(payload, payload_len, original_size, flags, trace, (int)i, primary_index, &decoded, &decoded_len) != 0) {
+        if (apply_decode_pipeline(payload, payload_len, original_size, flags, log, (int)i, primary_index, &decoded, &decoded_len) != 0) {
             free(payload);
             free_block_manager(manager);
             fclose(fp);
@@ -437,22 +548,67 @@ static int read_compressed(const char *input_file, const char *output_file, int 
 
 static void print_usage(const char *program_name) {
     printf("Usage:\n");
-    printf("  %s c <input_file> <output_file> [config.ini] [--trace|-t]\n", program_name);
-    printf("  %s d <input_file> <output_file> [--trace|-t]\n", program_name);
+    printf("  %s c <input_file> <output_file> [config.ini] [--trace|-t] [--log [file]] [--no-log]\n", program_name);
+    printf("  %s d <input_file> <output_file> [--trace|-t] [--log [file]] [--no-log]\n", program_name);
+    printf("\nOptions:\n");
+    printf("  --trace, -t       Print stage previews on terminal\n");
+    printf("  --log [file]      Write full stage output to file\n");
+    printf("                    Default file: <output_file>.stages.txt\n");
+    printf("  --no-log          Do not write a stage output file\n");
+}
+
+static const char *find_config_path(int argc, char **argv) {
+    int i;
+    for (i = 4; i < argc; ++i) {
+        if (argv[i][0] == '-') {
+            continue;
+        }
+        if (strstr(argv[i], ".ini") != NULL) {
+            return argv[i];
+        }
+    }
+    return "config.ini";
 }
 
 int main(int argc, char **argv) {
     int trace = has_trace_flag(argc, argv);
+    char log_path[512] = "";
+    int user_log_path = parse_log_path(argc, argv, log_path, sizeof(log_path));
+    int use_log;
+    StageLogger logger = {NULL, 0};
+    StageLogger *log_ptr = NULL;
+    FILE *log_fp = NULL;
+
     if (argc < 4) {
         print_usage(argv[0]);
         return 1;
     }
 
+    use_log = !has_no_log_flag(argc, argv);
+    if (use_log && !user_log_path) {
+        make_default_log_path(argv[3], log_path, sizeof(log_path));
+    }
+
+    if (trace || use_log) {
+        logger.console = trace;
+        log_ptr = &logger;
+    }
+
     if (argv[1][0] == 'c') {
         ProjectConfig cfg;
-        const char *config_path = (argc >= 5) ? argv[4] : "config.ini";
+        const char *config_path = find_config_path(argc, argv);
         BlockManager *manager;
         PipelineFlags flags;
+
+        if (use_log) {
+            log_fp = fopen(log_path, "w");
+            if (log_fp == NULL) {
+                fprintf(stderr, "failed to open log file: %s\n", log_path);
+                return 1;
+            }
+            logger.fp = log_fp;
+            printf("stage log file: %s\n", log_path);
+        }
 
         if (load_config(config_path, &cfg) != 0) {
             set_default_config(&cfg);
@@ -461,6 +617,9 @@ int main(int argc, char **argv) {
         manager = divide_into_blocks(argv[2], cfg.block_size);
         if (manager == NULL) {
             fprintf(stderr, "failed to read input file: %s\n", argv[2]);
+            if (log_fp != NULL) {
+                fclose(log_fp);
+            }
             return 1;
         }
 
@@ -470,18 +629,40 @@ int main(int argc, char **argv) {
         flags.rle2_enabled = (unsigned char)cfg.rle2_enabled;
         flags.ans_enabled = (unsigned char)cfg.ans_enabled;
 
-        if (write_compressed(argv[3], manager, flags, cfg.block_size, trace) != 0) {
+        if (write_compressed(argv[2], argv[3], manager, flags, cfg.block_size, log_ptr) != 0) {
             fprintf(stderr, "compression failed\n");
             free_block_manager(manager);
+            if (log_fp != NULL) {
+                fclose(log_fp);
+            }
             return 1;
         }
 
         free_block_manager(manager);
+        if (log_fp != NULL) {
+            fclose(log_fp);
+        }
         printf("compressed successfully: %s\n", argv[3]);
     } else if (argv[1][0] == 'd') {
-        if (read_compressed(argv[2], argv[3], trace) != 0) {
+        if (use_log) {
+            log_fp = fopen(log_path, user_log_path ? "a" : "w");
+            if (log_fp == NULL) {
+                fprintf(stderr, "failed to open log file: %s\n", log_path);
+                return 1;
+            }
+            logger.fp = log_fp;
+            printf(user_log_path ? "stage log file (append): %s\n" : "stage log file: %s\n", log_path);
+        }
+
+        if (read_compressed(argv[2], argv[3], log_ptr) != 0) {
             fprintf(stderr, "decompression failed\n");
+            if (log_fp != NULL) {
+                fclose(log_fp);
+            }
             return 1;
+        }
+        if (log_fp != NULL) {
+            fclose(log_fp);
         }
         printf("decompressed successfully: %s\n", argv[3]);
     } else {
